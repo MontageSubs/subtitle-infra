@@ -3,7 +3,7 @@
 # 中文注释：本 workflow 为 reusable workflow（workflow_call），用于将调用方仓库中的
 # 中英双语字幕（例如 web/web.srt）转换为两个输出：<basename>.Eng&Chs.srt 和 <basename>.Chs.srt。
 # Complex logic is delegated to subtitle-infra/scripts/convert_chs_eng.sh (keeps YAML clean).
-#
+
 # 使用示例（电影字幕仓库中的触发 workflow）：
 # --------------------------------------------------------------------
 # jobs:
@@ -17,7 +17,7 @@
 #     secrets:
 #       repo_token: ${{ secrets.GITHUB_TOKEN }}         # 关键：调用者必须把自己的 GITHUB_TOKEN 或 PAT 传入
 # --------------------------------------------------------------------
-#
+
 # 注意（重要）：
 # - 调用者必须传入 source_repository 与 source_ref（通常传 ${{ github.repository }} 与 ${{ github.ref }}）。
 # - 调用者必须在其调用 job 中把 repo_token(secret) 传到被调用 workflow（如上示例）。
@@ -69,8 +69,7 @@ on:
         description: "Token used to checkout and push to source repository. 调用方需传入用于 checkout/push 的 token（例如 GITHUB_TOKEN 或 PAT）"
         required: true
 
-permissions:
-  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
+permissions:  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
   contents: write
 
 concurrency:
@@ -85,7 +84,6 @@ jobs:
     outputs:
       eng_path: ${{ steps.process.outputs.eng_path }}
       chs_path: ${{ steps.process.outputs.chs_path }}
-
     steps:
       - name: Checkout infra repository (this workflows repo)
         # 中文：检出 subtitle-infra （工作流所在仓库），以便使用 scripts/convert_chs_eng.sh 等文件
@@ -115,7 +113,7 @@ jobs:
       - name: Ensure script is executable
         # 中文：为脚本设置可执行权限（防止权限问题）
         run: |
-          chmod +x ./scripts/convert_chs_eng.sh || true
+          chmod +x "${GITHUB_WORKSPACE}/scripts/convert_chs_eng.sh" || true
 
       - id: process
         name: Run conversion script (generate Eng&Chs + Chs)  # 运行转换脚本，生成两个输出文件
@@ -134,7 +132,7 @@ jobs:
           #   6) <split_threshold>         -> integer (optional)
           #   7) <bracket_factor>          -> integer (optional)
           #
-          bash ./scripts/convert_chs_eng.sh \
+          bash "${GITHUB_WORKSPACE}/scripts/convert_chs_eng.sh" \
             "source" \
             "${{ inputs.source_file }}" \
             "${{ inputs.target_dir }}" \
