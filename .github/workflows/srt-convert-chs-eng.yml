@@ -21,7 +21,7 @@
 # 注意（重要）：
 # - 调用者必须传入 source_repository 与 source_ref（通常传 ${{ github.repository }} 与 ${{ github.ref }}）。
 # - 调用者必须在其调用 job 中把 repo_token(secret) 传到被调用 workflow（如上示例）。
-#
+
 name: Convert SRT (Chs&Eng → Eng&Chs + Chs)
 
 on:
@@ -32,49 +32,41 @@ on:
         description: "Repository that contains the source SRT (owner/repo). 调用仓库 (owner/repo)"
         required: true
         type: string
-
       # 调用方 ref（完整 refs/...），必填 - e.g. refs/heads/main or the branch pushed
       source_ref:
         description: "Full ref to checkout on the source repository (e.g. refs/heads/main). 调用仓库的 ref"
         required: true
         type: string
-
       # 源文件路径（相对于仓库根），必填 - e.g. web/web.srt
       source_file:
         description: "Path to source srt file inside source repository (relative). 源文件路径"
         required: true
         type: string
-
       # 目标目录（相对于仓库根）写入输出文件，必填 - e.g. web
       target_dir:
         description: "Target directory (relative to repo root) where outputs should be written. 输出目录"
         required: true
         type: string
-
       # srt-tools 仓库（可选，默认使用 MontageSubs/srt-tools）
       tools_repository:
         description: "Repository containing the AWK scripts (srt-tools). 默认为 MontageSubs/srt-tools"
         required: false
         type: string
         default: "MontageSubs/srt-tools"
-
       # 可选：wrap 脚本参数（阈值），可由调用方覆盖
       split_threshold:
         description: "SPLIT_THRESHOLD for srt_zh_wrap.awk (meaningful chars). 换行阈值"
         required: false
         type: number
         default: 20
-
       bracket_factor:
         description: "BRACKET_FACTOR for srt_zh_wrap.awk. 括号因子"
         required: false
         type: number
         default: 2
-
-    # 要求调用者提供的 secret（用于 checkout & push 到调用者仓库）
     secrets:
       repo_token:
-        description: "Token used to checkout and push to source repository. Caller should pass ${{ secrets.GITHUB_TOKEN }} or a PAT. 调用方需传入用于 checkout/push 的 token"
+        description: "Token used to checkout and push to source repository. 调用方需传入用于 checkout/push 的 token（例如 GITHUB_TOKEN 或 PAT）"
         required: true
 
 permissions:
@@ -89,14 +81,13 @@ jobs:
   process:
     name: Process SRT and push outputs
     runs-on: ubuntu-latest
-
     # 输出：两个生成的文件相对路径（方便调用者后续使用）
     outputs:
       eng_path: ${{ steps.process.outputs.eng_path }}
       chs_path: ${{ steps.process.outputs.chs_path }}
 
     steps:
-      - name: Checkout infra repository (this workflow's repo)
+      - name: Checkout infra repository (this workflows repo)
         # 中文：检出 subtitle-infra （工作流所在仓库），以便使用 scripts/convert_chs_eng.sh 等文件
         uses: actions/checkout@v4
         with:
