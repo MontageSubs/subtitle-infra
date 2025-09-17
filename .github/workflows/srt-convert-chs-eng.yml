@@ -58,7 +58,7 @@ on:
         description: "SPLIT_THRESHOLD for srt_zh_wrap.awk (meaningful chars). 换行阈值"
         required: false
         type: number
-        default: 20
+        default: 15
       bracket_factor:
         description: "BRACKET_FACTOR for srt_zh_wrap.awk. 括号因子"
         required: false
@@ -69,8 +69,8 @@ on:
         description: "Token used to checkout and push to source repository. 调用方需传入用于 checkout/push 的 token（例如 GITHUB_TOKEN 或 PAT）"
         required: true
 
-permissions:  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
-  contents: write
+permissions:
+  contents: write  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
 
 concurrency:
   group: srt-convert-chs-eng-${{ inputs.source_repository }}-${{ inputs.source_ref }}
@@ -80,10 +80,12 @@ jobs:
   process:
     name: Process SRT and push outputs
     runs-on: ubuntu-latest
+
     # 输出：两个生成的文件相对路径（方便调用者后续使用）
     outputs:
       eng_path: ${{ steps.process.outputs.eng_path }}
       chs_path: ${{ steps.process.outputs.chs_path }}
+
     steps:
       - name: Checkout infra repository (this workflows repo)
         # 中文：检出 subtitle-infra （工作流所在仓库），以便使用 scripts/convert_chs_eng.sh 等文件
