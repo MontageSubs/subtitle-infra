@@ -3,7 +3,6 @@
 # 中文注释：本 workflow 为 reusable workflow（workflow_call），用于将调用方仓库中的
 # 中英双语字幕（例如 web/web.srt）转换为两个输出：<basename>.Eng&Chs.srt 和 <basename>.Chs.srt。
 # Complex logic is delegated to subtitle-infra/scripts/convert_chs_eng.sh (keeps YAML clean).
-
 # 使用示例（电影字幕仓库中的触发 workflow）：
 # --------------------------------------------------------------------
 # jobs:
@@ -17,7 +16,6 @@
 #     secrets:
 #       repo_token: ${{ secrets.GITHUB_TOKEN }}         # 关键：调用者必须把自己的 GITHUB_TOKEN 或 PAT 传入
 # --------------------------------------------------------------------
-
 # 注意（重要）：
 # - 调用者必须传入 source_repository 与 source_ref（通常传 ${{ github.repository }} 与 ${{ github.ref }}）。
 # - 调用者必须在其调用 job 中把 repo_token(secret) 传到被调用 workflow（如上示例）。
@@ -58,7 +56,7 @@ on:
         description: "SPLIT_THRESHOLD for srt_zh_wrap.awk (meaningful chars). 换行阈值"
         required: false
         type: number
-        default: 15
+        default: 20
       bracket_factor:
         description: "BRACKET_FACTOR for srt_zh_wrap.awk. 括号因子"
         required: false
@@ -69,8 +67,8 @@ on:
         description: "Token used to checkout and push to source repository. 调用方需传入用于 checkout/push 的 token（例如 GITHUB_TOKEN 或 PAT）"
         required: true
 
-permissions:
-  contents: write  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
+permissions:  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
+  contents: write
 
 concurrency:
   group: srt-convert-chs-eng-${{ inputs.source_repository }}-${{ inputs.source_ref }}
@@ -80,17 +78,20 @@ jobs:
   process:
     name: Process SRT and push outputs
     runs-on: ubuntu-latest
-
     # 输出：两个生成的文件相对路径（方便调用者后续使用）
     outputs:
       eng_path: ${{ steps.process.outputs.eng_path }}
       chs_path: ${{ steps.process.outputs.chs_path }}
-
     steps:
       - name: Checkout infra repository (this workflows repo)
-        # 中文：检出 subtitle-infra （工作流所在仓库），以便使用 scripts/convert_chs_eng.sh 等文件
+        # 中文：显式检出 subtitle-infra（工作流所在仓库）到 infra/ 子目录，
+        # 这样可以在 reusable workflow 被外部仓库调用时确保我们能通过 infra/... 定位到本仓库的脚本。
+        # Note: we use the caller-provided token to ensure proper permissions when needed.
         uses: actions/checkout@v4
         with:
+          repository: MontageSubs/subtitle-infra
+          token:      ${{ secrets.repo_token }}
+          path:       infra
           fetch-depth: 1
 
       - name: Checkout source (movie) repository
@@ -114,8 +115,9 @@ jobs:
 
       - name: Ensure script is executable
         # 中文：为脚本设置可执行权限（防止权限问题）
+        # 说明：脚本现在位于 infra/scripts/convert_chs_eng.sh，因为我们把 infra 仓库检出到 infra/ 子目录
         run: |
-          chmod +x "${GITHUB_WORKSPACE}/scripts/convert_chs_eng.sh" || true
+          chmod +x "${GITHUB_WORKSPACE}/infra/scripts/convert_chs_eng.sh" || true
 
       - id: process
         name: Run conversion script (generate Eng&Chs + Chs)  # 运行转换脚本，生成两个输出文件
@@ -134,7 +136,8 @@ jobs:
           #   6) <split_threshold>         -> integer (optional)
           #   7) <bracket_factor>          -> integer (optional)
           #
-          bash "${GITHUB_WORKSPACE}/scripts/convert_chs_eng.sh" \
+          # 关键修改：从 infra 子目录中调用脚本（确保可在被调用的环境下定位到脚本）
+          bash "${GITHUB_WORKSPACE}/infra/scripts/convert_chs_eng.sh" \
             "source" \
             "${{ inputs.source_file }}" \
             "${{ inputs.target_dir }}" \
