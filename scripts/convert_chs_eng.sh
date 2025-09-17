@@ -19,7 +19,7 @@
 #   5: source_ref            -> 完整的 Git 引用 (e.g., refs/heads/main)
 #   6: split_threshold       -> (可选) wrap 脚本换行阈值
 #   7: bracket_factor        -> (可选) wrap 脚本括号因子
-#
+
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -33,12 +33,12 @@ if [ "$#" -lt 5 ]; then
 fi
 
 SRC_CHECKOUT="$1"        # 源仓库检出目录 / Source checkout path
-SRC_FILE_REL="$2"        # 源字幕文件 / Source file relative path
-TARGET_DIR_REL="$3"      # 目标输出目录 / Target output dir
-TOOLS_PATH="$4"          # srt-tools 仓库目录 / srt-tools repo path
-SOURCE_REF="$5"          # Git 引用 (分支或 tag) / Source ref
-SPLIT_THRESHOLD="${6:-20}"   # 换行阈值 / Wrap threshold
-BRACKET_FACTOR="${7:-2}"     # 括号因子 / Bracket factor
+SRC_FILE_REL="$2"        # 源字幕文件相对路径 / Source file relative path
+TARGET_DIR_REL="$3"      # 目标目录（相对仓库根）/ Target directory relative to repo root
+TOOLS_PATH="$4"          # srt-tools 仓库目录 / srt-tools checkout path
+SOURCE_REF="$5"          # 完整 refs/... / Source ref
+SPLIT_THRESHOLD="${6:-20}"
+BRACKET_FACTOR="${7:-2}"
 
 # Commit author info / 提交者信息
 GIT_AUTHOR_NAME="MontageSubsBot"
@@ -97,7 +97,6 @@ fname="$(basename -- "$SRC_FILE_REL")"
 base="${fname%.srt}"
 DEST_DIR="${SRC_CHECKOUT}/${TARGET_DIR_REL}"
 mkdir -p "$DEST_DIR"
-
 DEST_ENG="${DEST_DIR}/${base}.Eng&Chs.srt"
 DEST_CHS="${DEST_DIR}/${base}.Chs.srt"
 
@@ -134,6 +133,8 @@ fi
 # Copy only if changed / 仅在文件有变化时复制
 # ----------------------------
 changed_files=()
+
+# copy_if_diff: 将生成文件替换到目标位置，仅在发生变化时记录**相对于仓库根**的路径（便于 git add）
 copy_if_diff() {
   src="$1"; dst="$2"
   mkdir -p "$(dirname -- "$dst")"
@@ -143,13 +144,30 @@ copy_if_diff() {
       return 1
     else
       mv -f -- "$src" "$dst"
-      changed_files+=("$dst")
+      # 记录为相对路径（相对于 $SRC_CHECKOUT）
+      case "$dst" in
+        "$SRC_CHECKOUT"/*)
+          rel="${dst#$SRC_CHECKOUT/}"
+          ;;
+        *)
+          rel="$(basename -- "$dst")"
+          ;;
+      esac
+      changed_files+=("$rel")
       echo "[info] Updated / 已更新: $dst"
       return 0
     fi
   else
     mv -f -- "$src" "$dst"
-    changed_files+=("$dst")
+    case "$dst" in
+      "$SRC_CHECKOUT"/*)
+        rel="${dst#$SRC_CHECKOUT/}"
+        ;;
+      *)
+        rel="$(basename -- "$dst")"
+        ;;
+    esac
+    changed_files+=("$rel")
     echo "[info] Created / 已创建: $dst"
     return 0
   fi
@@ -163,22 +181,33 @@ copy_if_diff "$TMP_CHS" "$DEST_CHS" || true
 # ----------------------------
 if [ "${#changed_files[@]}" -eq 0 ]; then
   echo "[info] Nothing to commit / 无需提交"
+  # 写出空 outputs，供 workflow 使用
   echo "eng_path=" > "$OUT_DESC"
   echo "chs_path=" >> "$OUT_DESC"
   exit 0
 fi
 
+# 切换到源仓库根并配置提交信息
 cd "$SRC_CHECKOUT"
 git config user.name "$GIT_AUTHOR_NAME"
 git config user.email "$GIT_AUTHOR_EMAIL"
+
+# Show what we will add (for logs)
+echo "[info] Files to add (relative to repo root):"
+printf ' - %s\n' "${changed_files[@]}"
+
 git add -- "${changed_files[@]}"
 
 COMMIT_MSG="update: ci: regenerate Eng&Chs.srt and Chs.srt from ${SRC_FILE_REL}"
-git commit -m "$COMMIT_MSG" || {
+if ! git commit -m "$COMMIT_MSG"; then
   echo "[info] No commit made / 无需提交"
+  # 即便无提交，也应写出 outputs（空），避免上游使用时失败
+  echo "eng_path=" > "$OUT_DESC"
+  echo "chs_path=" >> "$OUT_DESC"
   exit 0
-}
+fi
 
+# Determine branch name to push to (prefer the provided SOURCE_REF branch)
 branch=""
 if [[ "${SOURCE_REF}" == refs/heads/* ]]; then
   branch="${SOURCE_REF#refs/heads/}"
@@ -199,7 +228,6 @@ git push -f origin "HEAD:${branch}"
 # ----------------------------
 rel_eng="${TARGET_DIR_REL%/}/${base}.Eng&Chs.srt"
 rel_chs="${TARGET_DIR_REL%/}/${base}.Chs.srt"
-
 echo "eng_path=${rel_eng}" > "$OUT_DESC"
 echo "chs_path=${rel_chs}" >> "$OUT_DESC"
 
