@@ -1,0 +1,170 @@
+# File: .github/workflows/srt-convert-chs-eng.yml
+# Name: Convert SRT (Chs&Eng -> Eng&Chs + Chs)
+# 中文注释：本 workflow 为 reusable workflow（workflow_call），用于将调用方仓库中的
+# 中英双语字幕（例如 web/web.srt）转换为两个输出：<basename>.Eng&Chs.srt 和 <basename>.Chs.srt。
+# Complex logic is delegated to subtitle-infra/scripts/convert_chs_eng.sh (keeps YAML clean).
+#
+# 使用示例（电影字幕仓库中的触发 workflow）：
+# --------------------------------------------------------------------
+# jobs:
+#   call-subtitle-convert:
+#     uses: MontageSubs/subtitle-infra/.github/workflows/srt-convert-chs-eng.yml@main
+#     with:
+#       source_repository: ${{ github.repository }}
+#       source_ref:       ${{ github.ref }}             # e.g. refs/heads/main 或 refs/heads/feature/...
+#       source_file:      web/web.srt
+#       target_dir:       web
+#     secrets:
+#       repo_token: ${{ secrets.GITHUB_TOKEN }}         # 关键：调用者必须把自己的 GITHUB_TOKEN 或 PAT 传入
+# --------------------------------------------------------------------
+#
+# 注意（重要）：
+# - 调用者必须传入 source_repository 与 source_ref（通常传 ${{ github.repository }} 与 ${{ github.ref }}）。
+# - 调用者必须在其调用 job 中把 repo_token(secret) 传到被调用 workflow（如上示例）。
+#
+name: Convert SRT (Chs&Eng → Eng&Chs + Chs)
+
+on:
+  workflow_call:
+    inputs:
+      # 调用方仓库（owner/repo），必填 - the repository that contains the SRT to process
+      source_repository:
+        description: "Repository that contains the source SRT (owner/repo). 调用仓库 (owner/repo)"
+        required: true
+        type: string
+
+      # 调用方 ref（完整 refs/...），必填 - e.g. refs/heads/main or the branch pushed
+      source_ref:
+        description: "Full ref to checkout on the source repository (e.g. refs/heads/main). 调用仓库的 ref"
+        required: true
+        type: string
+
+      # 源文件路径（相对于仓库根），必填 - e.g. web/web.srt
+      source_file:
+        description: "Path to source srt file inside source repository (relative). 源文件路径"
+        required: true
+        type: string
+
+      # 目标目录（相对于仓库根）写入输出文件，必填 - e.g. web
+      target_dir:
+        description: "Target directory (relative to repo root) where outputs should be written. 输出目录"
+        required: true
+        type: string
+
+      # srt-tools 仓库（可选，默认使用 MontageSubs/srt-tools）
+      tools_repository:
+        description: "Repository containing the AWK scripts (srt-tools). 默认为 MontageSubs/srt-tools"
+        required: false
+        type: string
+        default: "MontageSubs/srt-tools"
+
+      # 可选：wrap 脚本参数（阈值），可由调用方覆盖
+      split_threshold:
+        description: "SPLIT_THRESHOLD for srt_zh_wrap.awk (meaningful chars). 换行阈值"
+        required: false
+        type: number
+        default: 20
+
+      bracket_factor:
+        description: "BRACKET_FACTOR for srt_zh_wrap.awk. 括号因子"
+        required: false
+        type: number
+        default: 2
+
+    # 要求调用者提供的 secret（用于 checkout & push 到调用者仓库）
+    secrets:
+      repo_token:
+        description: "Token used to checkout and push to source repository. Caller should pass ${{ secrets.GITHUB_TOKEN }} or a PAT. 调用方需传入用于 checkout/push 的 token"
+        required: true
+
+permissions:
+  # 本 workflow 本身不会直接访问 infra repo 的内容以外的受限 API，不过我们仍声明 contents write 为常见需求
+  contents: write
+
+concurrency:
+  group: srt-convert-chs-eng-${{ inputs.source_repository }}-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  process:
+    name: Process SRT and push outputs
+    runs-on: ubuntu-latest
+
+    # 输出：两个生成的文件相对路径（方便调用者后续使用）
+    outputs:
+      eng_path: ${{ steps.process.outputs.eng_path }}
+      chs_path: ${{ steps.process.outputs.chs_path }}
+
+    steps:
+      - name: Checkout infra repository (this workflow's repo)
+        # 中文：检出 subtitle-infra （工作流所在仓库），以便使用 scripts/convert_chs_eng.sh 等文件
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Checkout source (movie) repository
+        # 中文：检出要处理的字幕仓库（调用方），由 caller 提供 repo & ref & token
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref:        ${{ inputs.source_ref }}
+          token:      ${{ secrets.repo_token }}
+          path:       source
+          fetch-depth: 0           # 获取完整历史以便安全提交/推送
+
+      - name: Checkout srt-tools (AWK scripts repo)
+        # 中文：检出包含 AWK 脚本的工具仓库（默认 MontageSubs/srt-tools）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tools_repository }}
+          token:      ${{ secrets.repo_token }}
+          path:       srt-tools
+          fetch-depth: 1
+
+      - name: Ensure script is executable
+        # 中文：为脚本设置可执行权限（防止权限问题）
+        run: |
+          chmod +x ./scripts/convert_chs_eng.sh || true
+
+      - id: process
+        name: Run conversion script (generate Eng&Chs + Chs)  # 运行转换脚本，生成两个输出文件
+        # 该步骤需要把生成的相对路径写入 $GITHUB_OUTPUT（作为 step outputs），以便 job outputs 使用
+        run: |
+          set -euo pipefail
+          # 环境变量说明：
+          # - $RUNNER_TEMP 可用作脚本与 workflow 之间的临时交换文件位置
+          #
+          # 调用脚本（参数顺序）:
+          #   1) <source_checkout_path>    -> "source"
+          #   2) <source_file>             -> e.g. web/web.srt
+          #   3) <target_dir>              -> e.g. web
+          #   4) <tools_checkout_path>     -> "srt-tools"
+          #   5) <source_ref>              -> e.g. refs/heads/main
+          #   6) <split_threshold>         -> integer (optional)
+          #   7) <bracket_factor>          -> integer (optional)
+          #
+          bash ./scripts/convert_chs_eng.sh \
+            "source" \
+            "${{ inputs.source_file }}" \
+            "${{ inputs.target_dir }}" \
+            "srt-tools" \
+            "${{ inputs.source_ref }}" \
+            "${{ inputs.split_threshold }}" \
+            "${{ inputs.bracket_factor }}"
+
+          # 脚本会在 $RUNNER_TEMP/srt_convert_created 输出变量 (eng_path=..., chs_path=...)
+          if [ -f "${RUNNER_TEMP}/srt_convert_created" ]; then
+            # 将脚本写出的键值对导入 step outputs
+            cat "${RUNNER_TEMP}/srt_convert_created" >> "$GITHUB_OUTPUT"
+          else
+            # 若文件不存在，说明没有生成任何变化 / 也要确保 step outputs 不报错（写空）
+            echo "eng_path=" >> "$GITHUB_OUTPUT"
+            echo "chs_path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summary (log)
+        if: always()
+        run: |
+          echo "Converted files:"
+          echo "  eng: ${{ steps.process.outputs.eng_path }}"
+          echo "  chs: ${{ steps.process.outputs.chs_path }}"
