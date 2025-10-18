@@ -56,7 +56,7 @@ on:
         description: "SPLIT_THRESHOLD for srt_zh_wrap.awk (meaningful chars). 换行阈值"
         required: false
         type: number
-        default: 15
+        default: 20
       bracket_factor:
         description: "BRACKET_FACTOR for srt_zh_wrap.awk. 括号因子"
         required: false
